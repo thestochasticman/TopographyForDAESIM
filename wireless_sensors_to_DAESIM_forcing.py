@@ -1,6 +1,6 @@
 from pandas import read_csv, to_datetime, DataFrame
 
-def lux_to_srad_mj_per_day(df: DataFrame, lux_col: str = 'Illuminance (lux)', time_col: str = 'Time') -> DataFrame:
+def lux_to_mj_per_m2_per_day(df: DataFrame, lux_col: str = 'Illuminance (lux)', time_col: str = 'Time') -> DataFrame:
     """
     Convert instantaneous lux readings to daily SRAD in MJ/m²/day.
 
@@ -29,5 +29,6 @@ def convert_wireless_sensor_data_to_daesim_forcing(sensor_file_path: str):
     df_sensors = read_csv(sensor_file_path, encoding='latin-1')
     df_sensors = df_sensors[['Illuminance (lux)','TEROS-12-Calibrated VWC 1 (%)', 'TEROS-12-Calibrated VWC 2 (%)']]
     print(df_sensors)
+    
 if __name__ == '__main__':
     convert_wireless_sensor_data_to_daesim_forcing('/borevitz_projects/data/Phenode/ANU_4_All_Phenode_Data/wireless-sensor-data.csv')

@@ -5,7 +5,7 @@ Converts wireless sensor data (Phenode) to DAESIM forcing format.
 ## Usage
 
 ```python
-from wireless_sensors_to_DAESIM_forcing import lux_to_srad_mj_per_day, convert_wireless_sensor_data_to_daesim_forcing
+from wireless_sensors_to_DAESIM_forcing import lux_to_mj_per_m2_per_day, convert_wireless_sensor_data_to_daesim_forcing
 
 # Convert a sensor CSV file
 convert_wireless_sensor_data_to_daesim_forcing('/path/to/wireless-sensor-data.csv')
@@ -13,12 +13,12 @@ convert_wireless_sensor_data_to_daesim_forcing('/path/to/wireless-sensor-data.cs
 # Or use the lux conversion function directly
 from pandas import read_csv
 df = read_csv('sensor-data.csv', encoding='latin-1')
-df_daily_srad = lux_to_srad_mj_per_day(df)
+df_daily_srad = lux_to_mj_per_m2_per_day(df)
 ```
 
 ## Functions
 
-### `lux_to_srad_mj_per_day(df, lux_col, time_col)`
+### `lux_to_mj_per_m2_per_day(df, lux_col, time_col)`
 
 Converts instantaneous lux readings to daily solar radiation (SRAD) in MJ/m²/day.
 
