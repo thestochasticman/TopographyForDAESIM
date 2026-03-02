@@ -1,0 +1,343 @@
+---
+title: "Phenode_missingness"
+output: html_document
+date: "2026-02-25"
+---
+# ---- Daily obs-count summary + time-series plots (VWC1, VWC2, LUX) for the recent wireless sensor data download ----
+```{r}
+# Assumes your CSV has columns:
+#   Sensor
+#   Time  (ISO8601 with Z, e.g. 2025-01-01T00:10:00.000Z)
+#   TEROS-12-Calibrated VWC 1 (%)
+#   TEROS-12-Calibrated VWC 2 (%)
+#   Illuminance (lux)
+
+library(tidyverse)
+library(lubridate)
+
+# 1) Load data
+df <- readr::read_csv("~/Downloads/wireless-sensor-data (12).csv", show_col_types = FALSE)
+
+# 2) Rename key fields for easier handling
+dat <- df %>%
+  transmute(
+    sensor = .data$Sensor,
+    # parse as UTC then convert to Australia/Sydney, then take day
+    datetime_local = ymd_hms(.data$Time, tz = "UTC") %>% with_tz("Australia/Sydney"),
+    date = as_date(datetime_local),
+    vwc1 = .data$`TEROS-12-Calibrated VWC 1 (%)`,
+    vwc2 = .data$`TEROS-12-Calibrated VWC 2 (%)`,
+    lux  = .data$`Illuminance (lux)`
+  )
+
+# 3) Daily observation counts
+# If you also want to treat VWC == 0 as missing, set vwc_zero_is_missing <- TRUE
+vwc_zero_is_missing <- TRUE
+
+daily_counts <- dat %>%
+  mutate(
+    vwc1_obs = if (vwc_zero_is_missing) !is.na(vwc1) & vwc1 != 0 else !is.na(vwc1),
+    vwc2_obs = if (vwc_zero_is_missing) !is.na(vwc2) & vwc2 != 0 else !is.na(vwc2),
+    lux_obs  = !is.na(lux)
+  ) %>%
+  group_by(sensor, date) %>%
+  summarise(
+    n_vwc1 = sum(vwc1_obs),
+    n_vwc2 = sum(vwc2_obs),
+    n_lux  = sum(lux_obs),
+    n_total_rows = n(),
+    .groups = "drop"
+  )
+
+# Optional: save summary
+# readr::write_csv(daily_counts, "daily_observation_counts.csv")
+
+# 4) Plot through time
+# "all sensors and the three variables as separate lines":
+# We'll reshape to long format so each sensor-variable combination is its own line.
+plot_df <- daily_counts %>%
+  pivot_longer(
+    cols = c(n_vwc1, n_vwc2, n_lux),
+    names_to = "variable",
+    values_to = "n_obs"
+  ) %>%
+  mutate(
+    variable = recode(
+      variable,
+      n_vwc1 = "VWC 1 (Calibrated)",
+      n_vwc2 = "VWC 2 (Calibrated)",
+      n_lux  = "LUX"
+    ),
+    # Line grouping: each sensor is a distinct line within each variable panel
+    sensor = as.factor(sensor)
+  )
+
+# Clear visualisation option A (recommended):
+# Facet by variable -> each panel shows all sensors as separate lines.
+ggplot(plot_df, aes(x = date, y = n_obs, group = sensor, colour = sensor)) +
+  geom_line(linewidth = 0.6, alpha = 0.9) +
+  facet_wrap(~ variable, ncol = 1, scales = "free_y") +
+  labs(
+    title = "Daily observation counts by sensor",
+    x = "Date (Australia/Sydney)",
+    y = "Number of observations per day",
+    colour = "Sensor"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank()
+  )
+
+# Clear visualisation option B (alternate):
+# One panel per sensor, with the three variables as separate lines.
+# (This is often even clearer when you have many sensors.)
+ ggplot(daily_counts %>%
+          pivot_longer(c(n_vwc1, n_vwc2, n_lux), names_to="variable", values_to="n_obs") %>%
+          mutate(variable = recode(variable, n_vwc1="VWC1", n_vwc2="VWC2", n_lux="LUX")),
+        aes(x = date, y = n_obs, colour = variable)) +
+   geom_line(linewidth = 0.6) +
+   facet_wrap(~ sensor, scales = "free_y") +
+   labs(title="Daily observation counts per sensor", x="Date (Australia/Sydney)", y="Obs/day", colour="Variable") +
+   theme_minimal(base_size = 12) +
+   theme(legend.position="bottom", panel.grid.minor = element_blank())
+```
+
+# --- Combining previously downloaded soil moisture file with new file to fill in gap around early June late May ---
+```{r}
+library(tidyverse)
+library(lubridate)
+
+# --- file paths ---
+f12 <- "~/Downloads/wireless-sensor-data (12).csv"
+f9  <- "~/Downloads/wireless-sensor-data (9).csv"
+
+# --- exact columns (edit if your headers differ) ---
+time_col   <- "Time"
+sensor_col <- "Sensor"
+
+vwc1_12 <- "TEROS-12-Calibrated VWC 1 (%)"
+vwc2_12 <- "TEROS-12-Calibrated VWC 2 (%)"
+
+vwc1_9  <- "TEROS-12-Calibrated VWC 1"
+vwc2_9  <- "TEROS-12-Calibrated VWC 2"
+
+tz_use <- "Australia/Sydney"
+
+# Helper: daily mean treating 0 as missing
+daily_vwc <- function(df, time_col, sensor_col, vwc1, vwc2, tz) {
+  df %>%
+    mutate(Date = as.Date(ymd_hms(.data[[time_col]], tz = tz))) %>%
+    transmute(
+      Sensor = .data[[sensor_col]],
+      Date,
+      VWC1 = na_if(as.numeric(.data[[vwc1]]), 0),
+      VWC2 = na_if(as.numeric(.data[[vwc2]]), 0)
+    ) %>%
+    group_by(Sensor, Date) %>%
+    summarise(
+      VWC1 = if (all(is.na(VWC1))) NA_real_ else mean(VWC1, na.rm = TRUE),
+      VWC2 = if (all(is.na(VWC2))) NA_real_ else mean(VWC2, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+# --- read and summarise daily ---
+d12_daily <- readr::read_csv(f12, show_col_types = FALSE) %>%
+  daily_vwc(time_col, sensor_col, vwc1_12, vwc2_12, tz_use) %>%
+  rename(VWC1_12 = VWC1, VWC2_12 = VWC2)
+
+d9_daily <- readr::read_csv(f9, show_col_types = FALSE) %>%
+  daily_vwc(time_col, sensor_col, vwc1_9, vwc2_9, tz_use) %>%
+  rename(VWC1_9 = VWC1, VWC2_9 = VWC2)
+
+# --- build a complete daily scaffold ONLY within the time window of (9), per sensor ---
+scaffold_9_window <- d9_daily %>%
+  group_by(Sensor) %>%
+  summarise(
+    start_date = min(Date, na.rm = TRUE),
+    end_date   = max(Date, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(Date = map2(start_date, end_date, ~ seq.Date(.x, .y, by = "day"))) %>%
+  select(Sensor, Date) %>%
+  unnest(Date)
+
+# --- join and fill: (12) within window of (9), fill missing dates/values from (9) ---
+daily_12_filled_within_9 <- scaffold_9_window %>%
+  left_join(d12_daily, by = c("Sensor", "Date")) %>%
+  left_join(d9_daily,  by = c("Sensor", "Date")) %>%
+  mutate(
+    VWC1 = coalesce(VWC1_12, VWC1_9),
+    VWC2 = coalesce(VWC2_12, VWC2_9),
+    Filled_day_from_9   = is.na(VWC1_12) & is.na(VWC2_12) & (!is.na(VWC1_9) | !is.na(VWC2_9)),
+    Filled_VWC1_from_9  = is.na(VWC1_12) & !is.na(VWC1_9),
+    Filled_VWC2_from_9  = is.na(VWC2_12) & !is.na(VWC2_9)
+  ) %>%
+  arrange(Sensor, Date) %>%
+  select(
+    Sensor, Date,
+    VWC1, VWC2,
+    VWC1_12, VWC2_12,
+    VWC1_9,  VWC2_9,
+    Filled_day_from_9, Filled_VWC1_from_9, Filled_VWC2_from_9
+  )
+
+ ggplot(daily_12_filled_within_9 %>%
+          pivot_longer(c(n_vwc1, n_vwc2, n_lux), names_to="variable", values_to="n_obs") %>%
+          mutate(variable = recode(variable, n_vwc1="VWC1", n_vwc2="VWC2", n_lux="LUX")),
+        aes(x = date, y = n_obs, colour = variable)) +
+   geom_line(linewidth = 0.6) +
+   facet_wrap(~ sensor, scales = "free_y") +
+   labs(title="Daily observation counts per sensor", x="Date (Australia/Sydney)", y="Obs/day", colour="Variable") +
+   theme_minimal(base_size = 12) +
+   theme(legend.position="bottom", panel.grid.minor = element_blank())
+
+# --- write output ---
+readr::write_csv(daily_12_filled_within_9, "daily_vwc_12_filled_from_9_within_9_window.csv")
+```
+
+# ---- Fill gaps between two weather-station datasets (ANU 4 + ANU 3) ----
+```{r}
+
+# Goal: create a single "best-available" time series where missing values in ANU 4
+# are filled from ANU when timestamps align (or after resampling to a common interval).
+#
+# Assumptions:
+# - Both CSVs have a "Time" column in UTC ISO8601 with trailing "Z"
+# - Variables largely match by name (some PhenoDE-only fields like Primary temp)
+# - You want: air temp, pressure, rain, RH, VPD, windspeed
+#
+# Strategy:
+# 1) Parse timestamps
+# 2) Resample both to a common time grid (e.g. 10-min or hourly)
+# 3) "Coalesce" (prefer PhenoDE, fill from ANU)
+# 4) Recompute VPD on the combined series (recommended)
+
+library(tidyverse)
+library(lubridate)
+
+# ---- File paths ----
+phenode_path <- "~/Downloads/ANU_4_All_Phenode_Data/phenode_sensor_data.csv"
+anu_path     <- "~/Downloads/ANU_3_Environmental_Data 4.csv"
+
+# ---- Choose common time step ----
+# Use "10 mins" if your station logs frequently; "1 hour" is safer for joins.
+time_step <- "24 hours"
+
+# ---- Variables to use (edit if needed) ----
+# Note: ANU file appears to have "Air Temperature Secondary (°C)" but not "Air Temperature Primary (°C)"
+temp_col_anu      <- "Air Temperature Secondary (°C)"
+temp_col_phenode  <- "Air Temperature Primary (°C)"  # fallback to secondary if primary missing
+temp_col_phenode2 <- "Air Temperature Secondary (°C)"
+
+press_col <- "Atmospheric Pressure (kPa)"
+rain_col  <- "Calculated Fallen Rain (mm)"
+rh_col    <- "Relative Humidity (%)"
+vp_col    <- "Vapor Pressure (kPa)"
+wind_col  <- "Wind Speed (m/s)"
+
+# ---- Helper: aggregate to regular grid ----
+# For most met vars: mean across the interval
+# For rainfall: SUM across the interval (if it's incremental per record)
+# If "Calculated Fallen Rain (mm)" is already an interval total, summing is appropriate;
+# if it's cumulative, you'd need a different approach.
+aggregate_to_grid <- function(df, source_name) {
+  df %>%
+    mutate(
+      Time = ymd_hms(Time, tz = "UTC"),
+      # Create time bins
+      t_bin = floor_date(Time, unit = time_step)
+    ) %>%
+    group_by(t_bin) %>%
+    summarise(
+      source = source_name,
+      # Temperature: prefer primary if present; else secondary; else NA
+      temp_primary = if ("Air Temperature Primary (°C)" %in% names(df)) mean(`Air Temperature Primary (°C)`, na.rm = TRUE) else NA_real_,
+      temp_secondary = if ("Air Temperature Secondary (°C)" %in% names(df)) mean(`Air Temperature Secondary (°C)`, na.rm = TRUE) else NA_real_,
+      pressure = if (press_col %in% names(df)) mean(.data[[press_col]], na.rm = TRUE) else NA_real_,
+      rh       = if (rh_col %in% names(df)) mean(.data[[rh_col]], na.rm = TRUE) else NA_real_,
+      vp       = if (vp_col %in% names(df)) mean(.data[[vp_col]], na.rm = TRUE) else NA_real_,
+      wind     = if (wind_col %in% names(df)) mean(.data[[wind_col]], na.rm = TRUE) else NA_real_,
+      rain     = if (rain_col %in% names(df)) sum(.data[[rain_col]], na.rm = TRUE) else NA_real_,
+      .groups = "drop"
+    ) %>%
+    # Fix na.rm = TRUE behaviour: mean/sum returns Inf/-Inf when all NA
+    mutate(across(c(temp_primary, temp_secondary, pressure, rh, vp, wind, rain),
+                  ~ ifelse(is.infinite(.x), NA_real_, .x)))
+}
+
+# ---- Load + aggregate both ----
+phenode_raw <- readr::read_csv(phenode_path, show_col_types = FALSE)
+anu_raw     <- readr::read_csv(anu_path, show_col_types = FALSE)
+
+phenode_g <- aggregate_to_grid(phenode_raw, "phenode")
+anu_g     <- aggregate_to_grid(anu_raw,     "anu")
+
+# ---- Combine using coalesce (prefer PhenoDE, fill from ANU) ----
+# Temperature: use PhenoDE primary if available, else PhenoDE secondary, else ANU secondary
+combined <- full_join(
+  phenode_g %>% select(-source),
+  anu_g     %>% select(-source),
+  by = "t_bin",
+  suffix = c("_phenode", "_anu")
+) %>%
+  transmute(
+    datetime_utc = t_bin,
+
+    # Temp: prefer phenode primary -> phenode secondary -> anu secondary
+    air_temp_C = coalesce(temp_primary_phenode, temp_secondary_phenode, temp_secondary_anu),
+
+    atmospheric_pressure_kPa = coalesce(pressure_phenode, pressure_anu),
+    relative_humidity_pct    = coalesce(rh_phenode, rh_anu),
+    vapor_pressure_kPa       = coalesce(vp_phenode, vp_anu),
+    wind_speed_ms            = coalesce(wind_phenode, wind_anu),
+
+    # Rain: if phenode rain missing, use ANU. If BOTH have values and you believe they are independent
+    # measures of the same thing, you should NOT add them (would double-count). Coalesce is safest.
+    fallen_rain_mm           = coalesce(rain_phenode, rain_anu)
+  ) %>%
+  arrange(datetime_utc)
+
+# ---- Recompute VPD on the combined series (recommended) ----
+# VPD = es(T) - ea; if you have vapor_pressure_kPa as actual vapor pressure (ea), this works.
+# Tetens saturation vapor pressure (kPa)
+combined <- combined %>%
+  mutate(
+    es_kPa = 0.6108 * exp((17.27 * air_temp_C) / (air_temp_C + 237.3)),
+    vpd_kPa = es_kPa - vapor_pressure_kPa
+  )
+
+# ---- OPTIONAL: If vapor pressure is missing but RH is present, estimate ea from RH ----
+# ea = (RH/100) * es
+combined <- combined %>%
+  mutate(
+    vapor_pressure_kPa = if_else(
+      is.na(vapor_pressure_kPa) & !is.na(relative_humidity_pct) & !is.na(es_kPa),
+      (relative_humidity_pct / 100) * es_kPa,
+      vapor_pressure_kPa
+    ),
+    vpd_kPa = es_kPa - vapor_pressure_kPa
+  )
+
+# ---- Quick missingness check after filling ----
+missing_summary <- combined %>%
+  summarise(
+    n = n(),
+    pct_missing_temp  = mean(is.na(air_temp_C)) * 100,
+    pct_missing_press = mean(is.na(atmospheric_pressure_kPa)) * 100,
+    pct_missing_rh    = mean(is.na(relative_humidity_pct)) * 100,
+    pct_missing_vp    = mean(is.na(vapor_pressure_kPa)) * 100,
+    pct_missing_vpd   = mean(is.na(vpd_kPa)) * 100,
+    pct_missing_wind  = mean(is.na(wind_speed_ms)) * 100,
+    pct_missing_rain  = mean(is.na(fallen_rain_mm)) * 100
+  )
+
+print(missing_summary)
+
+# ---- Save combined dataset ----
+readr::write_csv(combined, "weather_filled_combined.csv")
+
+
+```
+
