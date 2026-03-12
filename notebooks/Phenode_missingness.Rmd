@@ -3,9 +3,31 @@ title: "Phenode_missingness"
 output: html_document
 date: "2026-02-25"
 ---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = here::here())
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+required_pkgs <- c("tidyverse", "lubridate", "here", "fs")
+missing_pkgs <- required_pkgs[!sapply(required_pkgs, requireNamespace, quietly = TRUE)]
+
+if (length(missing_pkgs) > 0) {
+  install.packages(missing_pkgs)
+}
+
+library(tidyverse)
+library(lubridate)
+library(here)
+library(fs)
+
+# Create output folder if it does not exist
+dir_create(here("output"))
+
+```
+
 # ---- Daily obs-count summary + time-series plots (VWC1, VWC2, LUX) for the recent wireless sensor data download ----
 ```{r}
-# Assumes your CSV has columns:
+# Assumes CSV has columns:
 #   Sensor
 #   Time  (ISO8601 with Z, e.g. 2025-01-01T00:10:00.000Z)
 #   TEROS-12-Calibrated VWC 1 (%)
@@ -16,7 +38,7 @@ library(tidyverse)
 library(lubridate)
 
 # 1) Load data
-df <- readr::read_csv("~/Downloads/wireless-sensor-data (12).csv", show_col_types = FALSE)
+df <- readr::read_csv(here("data","wireless-sensor-data-12.csv")) ##Wireless sensor data downloaded last year, no gaps. 
 
 # 2) Rename key fields for easier handling
 dat <- df %>%
@@ -109,8 +131,8 @@ library(tidyverse)
 library(lubridate)
 
 # --- file paths ---
-f12 <- "~/Downloads/wireless-sensor-data (12).csv"
-f9  <- "~/Downloads/wireless-sensor-data (9).csv"
+f12 <- here("data","wireless-sensor-data-12.csv")
+f9  <- here("data","wireless-sensor-data-9.csv") ##Wireless sensor data downloaded this year with erronous gaps
 
 # --- exact columns (edit if your headers differ) ---
 time_col   <- "Time"
@@ -218,8 +240,8 @@ library(tidyverse)
 library(lubridate)
 
 # ---- File paths ----
-phenode_path <- "~/Downloads/ANU_4_All_Phenode_Data/phenode_sensor_data.csv"
-anu_path     <- "~/Downloads/ANU_3_Environmental_Data 4.csv"
+phenode_path <- here("data","phenode_sensor_data.csv") #ANU 4 weather station data, ANU 4 was installed first
+anu_path     <- here("data","ANU_3_Environmental_Data_4.csv") #ANU 3 weather station data
 
 # ---- Choose common time step ----
 # Use "10 mins" if your station logs frequently; "1 hour" is safer for joins.
@@ -336,7 +358,7 @@ missing_summary <- combined %>%
 print(missing_summary)
 
 # ---- Save combined dataset ----
-readr::write_csv(combined, "weather_filled_combined.csv")
+write_csv(combined, here("output","weather_filled_combined.csv"))
 
 
 ```
