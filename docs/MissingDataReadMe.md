@@ -14,15 +14,15 @@ Alongside the VWC soil moisture from the sensors, LUX was used and converted to 
 
 | Sensor | Overall SM missing % | Overall LUX missing % | 
 | --- | ------ | ------| 
-| EOR | 2.3952096 | 
-| EER | 0.5988024 |
-| EOG | 0.0000000 |
-| EEG | 0.0000000 |
-| AOR | 0.0000000 |
-| AOR (old) | 15.5844156 |
-| AER | 7.1856287 |
-| AOG | 0.5988024 |
-| AEG | 4.1916168 |
+| EOR | 28.656716 | 3.5820896 | 
+| EER | 2.3880597 | 2.3880597 |
+| EOG | 20.298507 | 2.3880597 |
+| EEG | 3.2835821 | 3.5820896 |
+| AOR | 0.0000000 | 0 |
+| AOR (old) | 15.5844156 | 0 |
+| AER | 4.3478261 | 4.3478261 |
+| AOG | 0.3623188 | 0.3623188 |
+| AEG | 2.8985507 | 2.8985507 |
 
 Note: AOR (old) is a sensor that broke on the 3rd of May, 2025. 
 
