@@ -126,13 +126,13 @@ ggplot(plot_df, aes(x = date, y = n_obs, group = sensor, colour = sensor)) +
 ```
 
 # --- Combining previously downloaded soil moisture file with new file to fill in gap around early June late May ---
-```{r}
 library(tidyverse)
 library(lubridate)
+library(here)
 
 # --- file paths ---
-f12 <- here("data","wireless-sensor-data-12.csv")
-f9  <- here("data","wireless-sensor-data-9.csv") ##Wireless sensor data downloaded this year with erronous gaps
+f12 <- here("data", "wireless-sensor-data-12.csv")
+f9  <- here("data", "wireless-sensor-data-9.csv")
 
 # --- exact columns (edit if your headers differ) ---
 time_col   <- "Time"
@@ -144,37 +144,57 @@ vwc2_12 <- "TEROS-12-Calibrated VWC 2 (%)"
 vwc1_9  <- "TEROS-12-Calibrated VWC 1"
 vwc2_9  <- "TEROS-12-Calibrated VWC 2"
 
+lux_12  <- "Illuminance (lux)"
+lux_9   <- "Illuminance (lux)"
+
 tz_use <- "Australia/Sydney"
 
-# Helper: daily mean treating 0 as missing
-daily_vwc <- function(df, time_col, sensor_col, vwc1, vwc2, tz) {
+# Helper: daily mean
+# - VWC: treat 0 as missing
+# - LUX: keep 0 as valid
+daily_sensor <- function(df, time_col, sensor_col, vwc1, vwc2, lux, tz) {
   df %>%
-    mutate(Date = as.Date(ymd_hms(.data[[time_col]], tz = tz))) %>%
+    mutate(
+      Date = ymd_hms(.data[[time_col]], tz = "UTC") %>%
+        with_tz(tz) %>%
+        as.Date()
+    ) %>%
     transmute(
       Sensor = .data[[sensor_col]],
       Date,
       VWC1 = na_if(as.numeric(.data[[vwc1]]), 0),
-      VWC2 = na_if(as.numeric(.data[[vwc2]]), 0)
+      VWC2 = na_if(as.numeric(.data[[vwc2]]), 0),
+      LUX  = as.numeric(.data[[lux]])
     ) %>%
     group_by(Sensor, Date) %>%
     summarise(
       VWC1 = if (all(is.na(VWC1))) NA_real_ else mean(VWC1, na.rm = TRUE),
       VWC2 = if (all(is.na(VWC2))) NA_real_ else mean(VWC2, na.rm = TRUE),
+      LUX  = if (all(is.na(LUX)))  NA_real_ else mean(LUX,  na.rm = TRUE),
       .groups = "drop"
     )
 }
 
 # --- read and summarise daily ---
 d12_daily <- readr::read_csv(f12, show_col_types = FALSE) %>%
-  daily_vwc(time_col, sensor_col, vwc1_12, vwc2_12, tz_use) %>%
-  rename(VWC1_12 = VWC1, VWC2_12 = VWC2)
+  daily_sensor(time_col, sensor_col, vwc1_12, vwc2_12, lux_12, tz_use) %>%
+  rename(
+    VWC1_12 = VWC1,
+    VWC2_12 = VWC2,
+    LUX_12  = LUX
+  )
 
 d9_daily <- readr::read_csv(f9, show_col_types = FALSE) %>%
-  daily_vwc(time_col, sensor_col, vwc1_9, vwc2_9, tz_use) %>%
-  rename(VWC1_9 = VWC1, VWC2_9 = VWC2)
+  daily_sensor(time_col, sensor_col, vwc1_9, vwc2_9, lux_9, tz_use) %>%
+  rename(
+    VWC1_9 = VWC1,
+    VWC2_9 = VWC2,
+    LUX_9  = LUX
+  )
 
-# --- build a complete daily scaffold ONLY within the time window of (9), per sensor ---
-scaffold_9_window <- d9_daily %>%
+# --- scaffold follows file 12 only ---
+# This preserves the timeframe of 12
+scaffold_12_window <- d12_daily %>%
   group_by(Sensor) %>%
   summarise(
     start_date = min(Date, na.rm = TRUE),
@@ -185,38 +205,96 @@ scaffold_9_window <- d9_daily %>%
   select(Sensor, Date) %>%
   unnest(Date)
 
-# --- join and fill: (12) within window of (9), fill missing dates/values from (9) ---
-daily_12_filled_within_9 <- scaffold_9_window %>%
+# --- join and fill: preserve 12 window, fill missing values from 9 ---
+daily_12_filled_with_9 <- scaffold_12_window %>%
   left_join(d12_daily, by = c("Sensor", "Date")) %>%
   left_join(d9_daily,  by = c("Sensor", "Date")) %>%
   mutate(
     VWC1 = coalesce(VWC1_12, VWC1_9),
     VWC2 = coalesce(VWC2_12, VWC2_9),
-    Filled_day_from_9   = is.na(VWC1_12) & is.na(VWC2_12) & (!is.na(VWC1_9) | !is.na(VWC2_9)),
-    Filled_VWC1_from_9  = is.na(VWC1_12) & !is.na(VWC1_9),
-    Filled_VWC2_from_9  = is.na(VWC2_12) & !is.na(VWC2_9)
+    LUX  = coalesce(LUX_12,  LUX_9),
+
+    Filled_day_from_9  = (is.na(VWC1_12) & is.na(VWC2_12) & is.na(LUX_12)) &
+                         (!is.na(VWC1_9) | !is.na(VWC2_9) | !is.na(LUX_9)),
+
+    Filled_VWC1_from_9 = is.na(VWC1_12) & !is.na(VWC1_9),
+    Filled_VWC2_from_9 = is.na(VWC2_12) & !is.na(VWC2_9),
+    Filled_LUX_from_9  = is.na(LUX_12)  & !is.na(LUX_9)
   ) %>%
   arrange(Sensor, Date) %>%
   select(
     Sensor, Date,
-    VWC1, VWC2,
-    VWC1_12, VWC2_12,
-    VWC1_9,  VWC2_9,
-    Filled_day_from_9, Filled_VWC1_from_9, Filled_VWC2_from_9
+    VWC1, VWC2, LUX,
+    VWC1_12, VWC2_12, LUX_12,
+    VWC1_9,  VWC2_9,  LUX_9,
+    Filled_day_from_9,
+    Filled_VWC1_from_9, Filled_VWC2_from_9, Filled_LUX_from_9
   )
 
- ggplot(daily_12_filled_within_9 %>%
-          pivot_longer(c(n_vwc1, n_vwc2, n_lux), names_to="variable", values_to="n_obs") %>%
-          mutate(variable = recode(variable, n_vwc1="VWC1", n_vwc2="VWC2", n_lux="LUX")),
-        aes(x = date, y = n_obs, colour = variable)) +
-   geom_line(linewidth = 0.6) +
-   facet_wrap(~ sensor, scales = "free_y") +
-   labs(title="Daily observation counts per sensor", x="Date (Australia/Sydney)", y="Obs/day", colour="Variable") +
-   theme_minimal(base_size = 12) +
-   theme(legend.position="bottom", panel.grid.minor = element_blank())
+# --- separate LUX dataframe on same timestamps ---
+daily_lux_12_filled_with_9 <- daily_12_filled_with_9 %>%
+  select(
+    Sensor, Date,
+    LUX,
+    LUX_12,
+    LUX_9,
+    Filled_LUX_from_9,
+    Filled_day_from_9
+  )
 
-# --- write output ---
-readr::write_csv(daily_12_filled_within_9, "daily_vwc_12_filled_from_9_within_9_window.csv")
+# --- optional: missingness summary by sensor after fill ---
+missing_summary_sm <- daily_12_filled_with_9 %>%
+  group_by(Sensor) %>%
+  summarise(
+    n_days = n(),
+    pct_missing_VWC1 = mean(is.na(VWC1)) * 100,
+    pct_missing_VWC2 = mean(is.na(VWC2)) * 100,
+    pct_missing_LUX  = mean(is.na(LUX))  * 100,
+    pct_missing_VWC1_12 = mean(is.na(VWC1_12)) * 100,
+    pct_missing_VWC2_12 = mean(is.na(VWC2_12)) * 100,
+    pct_missing_LUX_12  = mean(is.na(LUX_12))  * 100,
+    .groups = "drop"
+  )
+
+# --- optional plot of final daily mean values ---
+plot_df <- daily_12_filled_with_9 %>%
+  select(Sensor, Date, VWC1, VWC2, LUX) %>%
+  pivot_longer(
+    cols = c(VWC1, VWC2, LUX),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+ggplot(plot_df, aes(x = Date, y = value, colour = variable)) +
+  geom_line(linewidth = 0.6) +
+  facet_wrap(~ Sensor, scales = "free_y") +
+  labs(
+    title = "Daily mean VWC1, VWC2 and LUX per sensor (12 filled from 9)",
+    x = "Date (Australia/Sydney)",
+    y = "Daily mean value",
+    colour = "Variable"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank()
+  )
+
+# --- write outputs ---
+readr::write_csv(
+  daily_12_filled_with_9,
+  "daily_vwc_lux_12_filled_with_9_preserve_12_window.csv"
+)
+
+readr::write_csv(
+  daily_lux_12_filled_with_9,
+  "daily_lux_12_filled_with_9_preserve_12_window.csv" ##This is useful if we just want LUX input for ET calculation
+)
+
+readr::write_csv(
+  missing_summary_sm,
+  "missing_summary_by_sensor_12_filled_with_9.csv"
+)
 ```
 
 # ---- Fill gaps between two weather-station datasets (ANU 4 + ANU 3) ----
