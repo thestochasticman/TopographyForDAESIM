@@ -1,0 +1,76 @@
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = here::here())
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+required_pkgs <- c("tidyverse", "lubridate", "here", "fs")
+missing_pkgs <- required_pkgs[!sapply(required_pkgs, requireNamespace, quietly = TRUE)]
+
+if (length(missing_pkgs) > 0) {
+  install.packages(missing_pkgs)
+}
+
+library(tidyverse)
+library(lubridate)
+library(here)
+library(fs)
+
+# Create output folder if it does not exist
+dir_create(here("output"))
+
+```
+
+
+# Calculate ET in mm/day using the Penman-Monteith FAO-56 equation. 
+```{r}
+# Combine weather and wireless sensor lux data
+# Daily averages of required variables
+lux_df <- readr::read_csv(here("Desktop","daily_lux_12_filled_with_9_preserve_12_window.csv"))
+
+weather_df <- readr::read_csv(here("Desktop","weather_filled_combined.csv"))
+
+weather_df <- weather_df %>%
+  mutate(Date = as.Date(datetime_utc))
+
+# Merge LUX df and weather station df by Date
+combined_df <- left_join(weather_df, lux_df,
+by = "Date") 
+
+# --- Daily ET calculation via the Penman-Monteith FAO-56 equation across the entire period May to December. Values are in mm/day. The equation is typically used in a crop context and assumes well-watered conditions (i.e. not in a drought). 
+
+daily_met <- combined_df %>%
+  group_by(Date) %>%
+  summarise(
+    T = mean(air_temp_C, na.rm = TRUE),  # mean air temp
+    u2 = mean(wind_speed_ms, na.rm = TRUE),      # wind speed at 2m
+    ea = mean(vapor_pressure_kPa, na.rm = TRUE),  # actual vapor pressure
+    lux = mean(LUX, na.rm = TRUE)
+  ) %>%
+  mutate(
+    # Radiation conversion: lux * 0.0079 MJ/m2/h * 12h ≈ daily radiation
+    Rs = lux * 0.0079 * 8 / 1e6,  # MJ/m²/day
+    Rn = Rs * 0.77,  # net radiation (approx. 77% of Rs reaches surface)
+
+    # Slope of vapor pressure curve Δ (kPa/°C)
+    Delta = 4098 * (0.6108 * exp((17.27 * T) / (T + 237.3))) / (T + 237.3)^2,
+
+    # Saturation vapor pressure es
+    es = 0.6108 * exp((17.27 * T) / (T + 237.3)),
+
+    # Psychrometric constant γ (kPa/°C)
+    gamma = 0.066,
+
+    # FAO-56 ET0
+    ET0 = (0.408 * Delta * (Rn) + gamma * (900 / (T + 273)) * u2 * (es - ea)) /
+          (Delta + gamma * (1 + 0.34 * u2)), 
+    
+  )
+
+# View result
+head(daily_met %>% select(Date, ET0))
+
+# Write to csv
+readr::write_csv(
+  Daily_met, here(
+  "Daily_et.csv")
+)
+```
